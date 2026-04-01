@@ -1,6 +1,5 @@
 `timescale 1ns/1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Tilt Detector Module - SINGLE DIRECTION VERSION (CLEAN STYLE)
 //
 // - Detects directional tilt
 // - Enforces single active direction (no diagonals)
