@@ -4,11 +4,6 @@
 //
 // Version 2: Fixed over-sensitivity issues
 //
-// Changes from v1:
-//   1. ENERGY_THRESH_LOW: 600 → 800 (less false positives)
-//   2. Added STARTUP_IGNORE samples to prevent power-up false triggers
-//
-// Kept from v1:
 //   - QUIET_SAMPLES = 3 (this was the key fix!)
 //   - ENERGY_THRESH_HIGH = 5000 (allow hard taps)
 //   - TAP_DUR_MAX = 5 (allow longer taps)
@@ -34,7 +29,7 @@ module single_tap_detector #(
 );
 
     //--------------------------------------------------
-    // ✅ NEW: Startup ignore counter
+    //
     // Prevents false triggers during power-up/reset
     //--------------------------------------------------
     reg [7:0] startup_cnt;
