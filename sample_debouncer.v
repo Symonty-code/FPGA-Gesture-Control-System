@@ -1,6 +1,5 @@
 `timescale 1ns/1ps
 //////////////////////////////////////////////////////////////////////////////////
-// gesture_debouncer.v  (CLEAN VERSION)
 //
 // Counter-based gesture debouncer (temporal stability check)
 //
@@ -25,10 +24,6 @@
 //   This is CORRECT synchronous behavior (nonblocking assignment).
 //   Testbench verifies: trigger happens on the Nth valid sample. PASS.
 //
-// CHANGES vs. previous version:
-//   1. Removed unused level_next combinational block (was dead code)
-//   2. Counter resets to 0 after triggering (cleaner)
-//   3. Simplified and clarified comments
 //////////////////////////////////////////////////////////////////////////////////
 
 module gesture_debouncer #(
