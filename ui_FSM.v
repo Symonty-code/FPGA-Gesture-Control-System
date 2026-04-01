@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
 ///////////////////////////////////////////////////////////////////////////////
 //
-// ui_fsm.v - FINAL: Mode 3 exceptions added
 //
-// Changes:
 //   - Flip ignored when in Mode 3 EXECUTE
 //   - Shake ignored when in Mode 3 EXECUTE
 //   - Flip and shake still work normally in Modes 0, 1, 2
