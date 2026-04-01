@@ -1,13 +1,5 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-///////////////////////
-// Created by David J. Marion
-// Modified for: Full 16-bit signed accelerometer data output
-// For Nexys A7 3-Axis Accelerometer Reading
-// Last update: 7.22.2022 (Modified for gesture detection project)
-//
-// MODIFICATION: Changed from 15-bit sliced output to full 16-bit signed X, Y, Z
-//
 // State Machine Flow for SPI Communications with 3-Axis Accelerometer
 //
 // 1. Wait for 6ms to allow sensor to power up and go into standby mode
