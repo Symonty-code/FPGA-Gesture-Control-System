@@ -29,4 +29,4 @@ This project implements a gesture-based control system on the Nexys A7 FPGA boar
 The system uses gesture input to control menu navigation and different LED-based operation modes. The selected mode is shown on the seven-segment display, while LEDs provide real-time visual feedback.
 
 ## Author / Team
-EEE project team, BUET
+Students of EEE department(project of sessional course), BUET
