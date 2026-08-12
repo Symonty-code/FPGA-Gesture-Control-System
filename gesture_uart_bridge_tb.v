@@ -50,6 +50,7 @@ module gesture_uart_bridge_tb;
     );
 
     integer command_count = 0;
+    integer before_count;
     reg [7:0] last_command = 8'h00;
 
     always @(posedge clk) begin
@@ -259,8 +260,6 @@ module gesture_uart_bridge_tb;
     end
 
     initial begin
-        integer before_count;
-
         repeat (8) @(posedge clk);
         @(negedge clk);
         rst = 1'b0;
