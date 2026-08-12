@@ -13,6 +13,12 @@ set_property -dict {PACKAGE_PIN F15 IOSTANDARD LVCMOS18} [get_ports ACL_SCLK]
 set_property -dict {PACKAGE_PIN D15 IOSTANDARD LVCMOS18} [get_ports ACL_CSN]
 
 ##############################################################################
+# USB-UART: FPGA -> PC
+# Digilent Nexys A7 master XDC maps UART_RXD_OUT to pin D4.
+##############################################################################
+set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33} [get_ports UART_RXD_OUT]
+
+##############################################################################
 # LEDs (ALL 16!)
 ##############################################################################
 set_property -dict {PACKAGE_PIN H17 IOSTANDARD LVCMOS18} [get_ports {LED[0]}]
