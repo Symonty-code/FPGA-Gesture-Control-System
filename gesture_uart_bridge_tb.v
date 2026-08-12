@@ -18,7 +18,14 @@ module gesture_uart_bridge_tb;
     // 4 MHz clock => 250 ns period.
     always #125 clk = ~clk;
 
-    gesture_uart_bridge dut (
+    // Use a much smaller UART divider in simulation so the test completes fast.
+    // Hardware still uses the bridge default UART_CLKS_PER_BIT = 35.
+    localparam integer SIM_CLKS_PER_BIT = 4;
+    localparam integer BIT_TIME_NS = SIM_CLKS_PER_BIT * 250;
+
+    gesture_uart_bridge #(
+        .UART_CLKS_PER_BIT(SIM_CLKS_PER_BIT)
+    ) dut (
         .clk(clk),
         .rst(rst),
         .tilt_left_level(tilt_left_level),
@@ -30,8 +37,6 @@ module gesture_uart_bridge_tb;
         .flip_signal(flip_signal),
         .uart_tx_out(uart_tx_out)
     );
-
-    localparam integer BIT_TIME_NS = 8750; // 35 clocks * 250 ns
 
     task receive_uart_byte;
         output [7:0] value;
@@ -62,64 +67,87 @@ module gesture_uart_bridge_tb;
         end
     endtask
 
+    // Drive gesture changes away from posedges to avoid testbench/DUT races.
     task hold_then_release_left;
         begin
+            @(negedge clk);
             tilt_left_level = 1'b1;
             repeat (4) @(posedge clk);
+            @(negedge clk);
             tilt_left_level = 1'b0;
         end
     endtask
 
     task hold_then_release_right;
         begin
+            @(negedge clk);
             tilt_right_level = 1'b1;
             repeat (4) @(posedge clk);
+            @(negedge clk);
             tilt_right_level = 1'b0;
         end
     endtask
 
     task hold_then_release_forward;
         begin
+            @(negedge clk);
             tilt_forward_level = 1'b1;
             repeat (4) @(posedge clk);
+            @(negedge clk);
             tilt_forward_level = 1'b0;
         end
     endtask
 
     task hold_then_release_backward;
         begin
+            @(negedge clk);
             tilt_backward_level = 1'b1;
             repeat (4) @(posedge clk);
+            @(negedge clk);
             tilt_backward_level = 1'b0;
         end
     endtask
 
     task pulse_tap;
         begin
+            @(negedge clk);
             tap_signal = 1'b1;
-            @(posedge clk);
+            repeat (2) @(posedge clk);
+            @(negedge clk);
             tap_signal = 1'b0;
         end
     endtask
 
     task hold_then_release_shake;
         begin
+            @(negedge clk);
             shake_level = 1'b1;
             repeat (4) @(posedge clk);
+            @(negedge clk);
             shake_level = 1'b0;
         end
     endtask
 
     task pulse_flip;
         begin
+            @(negedge clk);
             flip_signal = 1'b1;
-            @(posedge clk);
+            repeat (2) @(posedge clk);
+            @(negedge clk);
             flip_signal = 1'b0;
         end
     endtask
 
+    // Safety watchdog: the simulation can never run forever if a byte is missed.
+    initial begin
+        #500000;
+        $display("FAIL: simulation timeout");
+        $fatal;
+    end
+
     initial begin
         repeat (8) @(posedge clk);
+        @(negedge clk);
         rst = 1'b0;
         repeat (4) @(posedge clk);
 
@@ -127,37 +155,37 @@ module gesture_uart_bridge_tb;
             hold_then_release_left();
             expect_uart_byte("L");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             hold_then_release_right();
             expect_uart_byte("R");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             hold_then_release_forward();
             expect_uart_byte("U");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             hold_then_release_backward();
             expect_uart_byte("D");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             pulse_tap();
             expect_uart_byte("T");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             hold_then_release_shake();
             expect_uart_byte("S");
         join
-        repeat (10) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             pulse_flip();
