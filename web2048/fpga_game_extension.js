@@ -51,6 +51,12 @@
   Fpga2048Controller.prototype.buildUi = function () {
     var style = document.createElement("style");
     style.textContent =
+      // Force the original 2048 game column to stay centered on wide displays.
+      // The upstream CSS normally centers it too, but this explicit rule keeps
+      // the FPGA demo layout stable across browser/zoom combinations.
+      ".container{width:500px!important;margin-left:auto!important;margin-right:auto!important;}" +
+      ".game-container{margin-left:auto!important;margin-right:auto!important;}" +
+      "@media screen and (max-width:520px){.container{width:280px!important;}}" +
       ".fpga-overlay{" +
       "position:fixed;inset:0;z-index:10000;display:flex;" +
       "align-items:center;justify-content:center;background:rgba(250,248,239,.94);" +
