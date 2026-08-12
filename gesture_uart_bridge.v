@@ -11,7 +11,11 @@
 //   F = flip
 //
 // Every gesture is edge-detected so a held gesture produces only one command.
-module gesture_uart_bridge (
+module gesture_uart_bridge #(
+    // Hardware default: 4 MHz / 35 ~= 114.3 kbaud, close to 115200.
+    // The testbench overrides this with a smaller value to simulate quickly.
+    parameter integer UART_CLKS_PER_BIT = 35
+)(
     input  wire clk,
     input  wire rst,
 
@@ -47,7 +51,7 @@ module gesture_uart_bridge (
     wire      uart_busy;
 
     uart_tx #(
-        .CLKS_PER_BIT(35)
+        .CLKS_PER_BIT(UART_CLKS_PER_BIT)
     ) tx_inst (
         .clk  (clk),
         .rst  (rst),
@@ -69,8 +73,6 @@ module gesture_uart_bridge (
             uart_send     <= 1'b0;
             uart_data     <= 8'h00;
         end else begin
-            // Track levels continuously. Tap/flip are also edge-detected because
-            // their current implementations may remain asserted until the next sample.
             prev_left     <= tilt_left_level;
             prev_right    <= tilt_right_level;
             prev_forward  <= tilt_forward_level;
@@ -81,8 +83,8 @@ module gesture_uart_bridge (
 
             uart_send <= 1'b0;
 
-            // Gesture events are much slower than one UART byte, so a simple
-            // one-event priority encoder is sufficient for this interface.
+            // Gesture events are much slower than one UART byte in hardware,
+            // so a one-event priority encoder is sufficient here.
             if (!uart_busy) begin
                 if (evt_flip) begin
                     uart_data <= "F";
