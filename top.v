@@ -1,13 +1,4 @@
 `timescale 1ns/1ps
-///////////////////////////////////////////////////////////////////////////////
-//
-//
-// Changes:
-//   - LED expanded to [15:0] (16 LEDs)
-//   - LED_mode expanded to [15:0]
-//   - Mode 3 uses LED[8] for shake, LED[9] for flip
-//
-///////////////////////////////////////////////////////////////////////////////
 
 module top(
     input  CLK100MHZ,
@@ -15,9 +6,8 @@ module top(
     output ACL_MOSI,
     output ACL_SCLK,
     output ACL_CSN,
-    output [15:0] LED,  // ✅ CHANGED: Now 16 LEDs!
-    
-    // 7-Segment Display Outputs
+    output UART_RXD_OUT,       // FPGA -> PC through Nexys A7 USB-UART bridge
+    output [15:0] LED,
     output [7:0] AN,
     output [6:0] SEG,
     output DP
@@ -34,7 +24,7 @@ module top(
     );
 
     //--------------------------------------------------
-    // SPI
+    // SPI accelerometer acquisition
     //--------------------------------------------------
     wire signed [15:0] accel_x, accel_y, accel_z;
     wire data_valid;
@@ -59,7 +49,7 @@ module top(
 
     always @(posedge clk_4MHz) begin
         if (rst_cnt < 10) begin
-            rst_cnt <= rst_cnt + 1;
+            rst_cnt <= rst_cnt + 1'b1;
             rst <= 1'b1;
         end else begin
             rst <= 1'b0;
@@ -115,7 +105,7 @@ module top(
     );
 
     //--------------------------------------------------
-    // Tilt Detector (4-directional)
+    // Tilt Detector
     //--------------------------------------------------
     wire tilt_left_cand, tilt_right_cand;
     wire tilt_forward_cand, tilt_backward_cand;
@@ -175,9 +165,9 @@ module top(
         .flip_pulse(flip_pulse)
     );
 
-    //==================================================
-    // DEBOUNCERS (All 4 tilt directions + shake)
-    //==================================================
+    //--------------------------------------------------
+    // Debouncers
+    //--------------------------------------------------
     wire tilt_left_level, tilt_right_level;
     wire tilt_forward_level, tilt_backward_level;
     wire shake_level;
@@ -222,9 +212,27 @@ module top(
         .gesture_pulse()
     );
 
-    //==================================================
-    // UI FSM (Navigation Logic)
-    //==================================================
+    //--------------------------------------------------
+    // NEW: FPGA -> PC gesture command bridge
+    // Sends one ASCII byte per newly detected gesture:
+    // L, R, U, D, T, S, F
+    //--------------------------------------------------
+    gesture_uart_bridge game_uart (
+        .clk                 (clk_4MHz),
+        .rst                 (rst),
+        .tilt_left_level     (tilt_left_level),
+        .tilt_right_level    (tilt_right_level),
+        .tilt_forward_level  (tilt_forward_level),
+        .tilt_backward_level (tilt_backward_level),
+        .tap_signal          (tap_pulse),
+        .shake_level         (shake_level),
+        .flip_signal         (flip_pulse),
+        .uart_tx_out         (UART_RXD_OUT)
+    );
+
+    //--------------------------------------------------
+    // Existing UI FSM
+    //--------------------------------------------------
     wire [1:0] menu_index;
     wire in_execute;
 
@@ -232,32 +240,26 @@ module top(
         .clk(clk_4MHz),
         .rst(rst),
         .sample_valid(sh_valid),
-
         .tilt_left_level(tilt_left_level),
         .tilt_right_level(tilt_right_level),
         .shake_level(shake_level),
-
         .tap_pulse(tap_pulse),
         .flip_pulse(flip_pulse),
-
         .menu_index(menu_index),
         .in_execute(in_execute)
     );
 
-    //==================================================
-    // MODE CONTROLLER
-    //==================================================
-    wire [15:0] LED_mode;  // ✅ CHANGED: Now 16 bits!
+    //--------------------------------------------------
+    // Existing Mode Controller
+    //--------------------------------------------------
+    wire [15:0] LED_mode;
 
     mode_controller modes (
         .clk(clk_4MHz),
         .rst(rst),
         .sample_valid(sh_valid),
-        
         .in_execute(in_execute),
         .menu_index(menu_index),
-        
-        // Mode control gestures
         .tilt_left_level(tilt_left_level),
         .tilt_right_level(tilt_right_level),
         .tilt_forward_level(tilt_forward_level),
@@ -265,13 +267,12 @@ module top(
         .tap_pulse(tap_pulse),
         .shake_level(shake_level),
         .flip_pulse(flip_pulse),
-        
         .LED_mode(LED_mode)
     );
 
-    //==================================================
+    //--------------------------------------------------
     // 7-Segment Display
-    //==================================================
+    //--------------------------------------------------
     simple_seg7 display (
         .menu_index(menu_index),
         .AN(AN),
@@ -279,25 +280,22 @@ module top(
         .DP(DP)
     );
 
-    //==================================================
-    // LED OUTPUT MUX (MENU vs EXECUTE)
-    //==================================================
-    reg [15:0] LED_out;  // ✅ CHANGED: Now 16 bits!
-    
+    //--------------------------------------------------
+    // Existing LED Output MUX
+    //--------------------------------------------------
+    reg [15:0] LED_out;
+
     always @(*) begin
         if (in_execute) begin
-            // EXECUTE: Show mode output
             LED_out = LED_mode;
-            // Always show execute state on LED[7]
             LED_out[7] = 1'b1;
         end else begin
-            // MENU: Show menu_index for debug
-            LED_out = 16'b0000000000000000;  // ✅ CHANGED: 16 bits
+            LED_out = 16'b0;
             LED_out[1:0] = menu_index;
-            LED_out[7] = 1'b0;  // Not executing
+            LED_out[7] = 1'b0;
         end
     end
-    
+
     assign LED = LED_out;
 
 endmodule
