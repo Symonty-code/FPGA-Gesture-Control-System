@@ -18,13 +18,16 @@ module gesture_uart_bridge_tb;
     // 4 MHz clock => 250 ns period.
     always #125 clk = ~clk;
 
-    // Use a much smaller UART divider in simulation so the test completes fast.
-    // Hardware still uses the bridge default UART_CLKS_PER_BIT = 35.
+    // Fast simulation parameters. Hardware defaults remain much longer.
     localparam integer SIM_CLKS_PER_BIT = 4;
-    localparam integer BIT_TIME_NS = SIM_CLKS_PER_BIT * 250;
+    localparam integer SIM_REARM_CLKS   = 4;
+    localparam integer SIM_TAP_GUARD    = 8;
+    localparam integer BIT_TIME_NS      = SIM_CLKS_PER_BIT * 250;
 
     gesture_uart_bridge #(
-        .UART_CLKS_PER_BIT(SIM_CLKS_PER_BIT)
+        .UART_CLKS_PER_BIT(SIM_CLKS_PER_BIT),
+        .REARM_CLKS(SIM_REARM_CLKS),
+        .TAP_GUARD_CLKS(SIM_TAP_GUARD)
     ) dut (
         .clk(clk),
         .rst(rst),
@@ -42,13 +45,13 @@ module gesture_uart_bridge_tb;
         output [7:0] value;
         integer i;
         begin
-            @(negedge uart_tx_out);              // start bit begins
-            #(BIT_TIME_NS + BIT_TIME_NS/2);      // center of data bit 0
+            @(negedge uart_tx_out);
+            #(BIT_TIME_NS + BIT_TIME_NS/2);
             for (i = 0; i < 8; i = i + 1) begin
                 value[i] = uart_tx_out;
                 #BIT_TIME_NS;
             end
-            #BIT_TIME_NS;                        // allow stop bit to finish
+            #BIT_TIME_NS;
         end
     endtask
 
@@ -67,12 +70,11 @@ module gesture_uart_bridge_tb;
         end
     endtask
 
-    // Drive gesture changes away from posedges to avoid testbench/DUT races.
     task hold_then_release_left;
         begin
             @(negedge clk);
             tilt_left_level = 1'b1;
-            repeat (4) @(posedge clk);
+            repeat (10) @(posedge clk); // held long enough to prove one-shot behavior
             @(negedge clk);
             tilt_left_level = 1'b0;
         end
@@ -82,7 +84,7 @@ module gesture_uart_bridge_tb;
         begin
             @(negedge clk);
             tilt_right_level = 1'b1;
-            repeat (4) @(posedge clk);
+            repeat (6) @(posedge clk);
             @(negedge clk);
             tilt_right_level = 1'b0;
         end
@@ -92,7 +94,7 @@ module gesture_uart_bridge_tb;
         begin
             @(negedge clk);
             tilt_forward_level = 1'b1;
-            repeat (4) @(posedge clk);
+            repeat (6) @(posedge clk);
             @(negedge clk);
             tilt_forward_level = 1'b0;
         end
@@ -102,7 +104,7 @@ module gesture_uart_bridge_tb;
         begin
             @(negedge clk);
             tilt_backward_level = 1'b1;
-            repeat (4) @(posedge clk);
+            repeat (6) @(posedge clk);
             @(negedge clk);
             tilt_backward_level = 1'b0;
         end
@@ -122,7 +124,7 @@ module gesture_uart_bridge_tb;
         begin
             @(negedge clk);
             shake_level = 1'b1;
-            repeat (4) @(posedge clk);
+            repeat (6) @(posedge clk);
             @(negedge clk);
             shake_level = 1'b0;
         end
@@ -138,9 +140,28 @@ module gesture_uart_bridge_tb;
         end
     endtask
 
-    // Safety watchdog: the simulation can never run forever if a byte is missed.
+    // Simulates a tap-like transient at the beginning of a shake.
+    // Expected result: S only; pending T must be cancelled.
+    task tap_then_shake;
+        begin
+            @(negedge clk);
+            tap_signal = 1'b1;
+            repeat (2) @(posedge clk);
+            @(negedge clk);
+            tap_signal = 1'b0;
+
+            repeat (2) @(posedge clk);
+
+            @(negedge clk);
+            shake_level = 1'b1;
+            repeat (8) @(posedge clk);
+            @(negedge clk);
+            shake_level = 1'b0;
+        end
+    endtask
+
     initial begin
-        #500000;
+        #800000;
         $display("FAIL: simulation timeout");
         $fatal;
     end
@@ -149,50 +170,60 @@ module gesture_uart_bridge_tb;
         repeat (8) @(posedge clk);
         @(negedge clk);
         rst = 1'b0;
-        repeat (4) @(posedge clk);
+        repeat (6) @(posedge clk);
 
         fork
             hold_then_release_left();
             expect_uart_byte("L");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
         fork
             hold_then_release_right();
             expect_uart_byte("R");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
         fork
             hold_then_release_forward();
             expect_uart_byte("U");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
         fork
             hold_then_release_backward();
             expect_uart_byte("D");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
+        // Tap is intentionally delayed by the guard interval.
         fork
             pulse_tap();
             expect_uart_byte("T");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
         fork
             hold_then_release_shake();
             expect_uart_byte("S");
         join
-        repeat (6) @(posedge clk);
+        repeat (10) @(posedge clk);
 
         fork
             pulse_flip();
             expect_uart_byte("F");
         join
+        repeat (10) @(posedge clk);
 
-        $display("ALL FPGA->UART GESTURE COMMAND TESTS PASSED");
+        // Arbitration regression: an early tap-like pulse followed by shake
+        // must resolve to S rather than T.
+        fork
+            tap_then_shake();
+            expect_uart_byte("S");
+        join
+
+        $display("PASS: tap-to-shake arbitration suppressed false T");
+        $display("ALL FPGA->UART GUARDED COMMAND TESTS PASSED");
         $finish;
     end
 
