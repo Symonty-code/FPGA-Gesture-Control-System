@@ -10,21 +10,30 @@
 //   S = shake
 //   F = flip
 //
-// Robustness rules:
-//   1) One physical gesture should produce one command.
-//   2) After a command, the bridge must observe a quiet/neutral interval before re-arming.
+// Final gesture-decision arbiter rules:
+//   1) Exactly one accepted command is emitted for one physical gesture episode.
+//   2) Priority is: flip > shake > directional tilt > tap.
 //   3) Tap is delayed briefly so a developing shake/tilt/flip can override a false tap.
-//   4) Priority is: flip > shake > directional tilt > tap.
+//   4) After each accepted command, a class-specific refractory interval suppresses
+//      detector tails/cross-triggers.
+//   5) After the refractory interval, the board must remain quiet/neutral for a
+//      short interval before the arbiter re-arms.
 module gesture_uart_bridge #(
     // Hardware default: 4 MHz / 35 ~= 114.3 kbaud, close to 115200.
     parameter integer UART_CLKS_PER_BIT = 35,
 
-    // 4 MHz clock: 600000 clocks ~= 150 ms of quiet before accepting a new gesture.
-    parameter integer REARM_CLKS = 600000,
+    // 4 MHz clock: 400000 clocks = 100 ms neutral interval before re-arming.
+    parameter integer REARM_CLKS = 400000,
 
-    // 4 MHz clock: 720000 clocks ~= 180 ms tap guard.
-    // This gives the shake detector time to assert and suppress a shake-induced false tap.
-    parameter integer TAP_GUARD_CLKS = 720000
+    // 4 MHz clock: 800000 clocks = 200 ms tap guard.
+    parameter integer TAP_GUARD_CLKS = 800000,
+
+    // Class-specific refractory intervals at 4 MHz.
+    // Tilt is already strongly debounced in top.v, so it needs only a short lockout.
+    parameter integer TILT_LOCKOUT_CLKS  = 400000,   // 100 ms
+    parameter integer TAP_LOCKOUT_CLKS   = 1000000,  // 250 ms
+    parameter integer SHAKE_LOCKOUT_CLKS = 2400000,  // 600 ms
+    parameter integer FLIP_LOCKOUT_CLKS  = 2400000   // 600 ms
 )(
     input  wire clk,
     input  wire rst,
@@ -78,15 +87,15 @@ module gesture_uart_bridge #(
     );
 
     //--------------------------------------------------
-    // Command guard / arbitration
+    // Gesture decision arbiter state
     //--------------------------------------------------
-    localparam integer REARM_W = (REARM_CLKS <= 1) ? 1 : $clog2(REARM_CLKS);
-    localparam integer TAP_W   = (TAP_GUARD_CLKS <= 1) ? 1 : $clog2(TAP_GUARD_CLKS);
-
-    reg [REARM_W-1:0] rearm_count;
-    reg [TAP_W-1:0]   tap_guard_count;
-    reg                armed;
-    reg                pending_tap;
+    reg        armed;
+    reg        pending_tap;
+    reg        lockout_active;
+    reg [31:0] rearm_count;
+    reg [31:0] tap_guard_count;
+    reg [31:0] lockout_count;
+    reg [31:0] lockout_target;
 
     wire any_level_active = tilt_left_level |
                             tilt_right_level |
@@ -94,7 +103,7 @@ module gesture_uart_bridge #(
                             tilt_backward_level |
                             shake_level;
 
-    // A quiet interval means no held gesture and no event pulse at this clock.
+    // Quiet means no held gesture and no one-cycle event input currently asserted.
     wire quiet_now = ~any_level_active & ~tap_signal & ~flip_signal;
 
     //--------------------------------------------------
@@ -114,12 +123,15 @@ module gesture_uart_bridge #(
             uart_data       <= 8'h00;
 
             armed           <= 1'b1;
-            rearm_count     <= {REARM_W{1'b0}};
             pending_tap     <= 1'b0;
-            tap_guard_count <= {TAP_W{1'b0}};
+            lockout_active  <= 1'b0;
+            rearm_count     <= 32'd0;
+            tap_guard_count <= 32'd0;
+            lockout_count   <= 32'd0;
+            lockout_target  <= 32'd0;
         end else begin
             //--------------------------------------------------
-            // Always update previous samples for edge detection.
+            // Always track detector inputs, even while commands are suppressed.
             //--------------------------------------------------
             prev_left     <= tilt_left_level;
             prev_right    <= tilt_right_level;
@@ -132,126 +144,180 @@ module gesture_uart_bridge #(
             uart_send <= 1'b0;
 
             //--------------------------------------------------
-            // Re-arm only after the board has returned to a quiet state.
+            // 1) Refractory interval: ignore ALL detector activity.
+            // This absorbs shake/tap/flip tails after one accepted gesture.
             //--------------------------------------------------
-            if (!armed && !pending_tap) begin
+            if (lockout_active) begin
+                pending_tap     <= 1'b0;
+                tap_guard_count <= 32'd0;
+                armed           <= 1'b0;
+                rearm_count     <= 32'd0;
+
+                if ((lockout_target <= 1) || (lockout_count >= lockout_target - 1)) begin
+                    lockout_active <= 1'b0;
+                    lockout_count  <= 32'd0;
+                end else begin
+                    lockout_count <= lockout_count + 1'b1;
+                end
+            end
+
+            //--------------------------------------------------
+            // 2) Pending tap arbitration.
+            // A tap is not emitted immediately. Stronger gestures can replace it.
+            //--------------------------------------------------
+            else if (pending_tap) begin
+                if (!uart_busy) begin
+                    if (evt_flip || flip_signal) begin
+                        uart_data        <= "F";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= FLIP_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if (evt_shake || shake_level) begin
+                        uart_data        <= "S";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= SHAKE_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if (evt_forward || tilt_forward_level) begin
+                        uart_data        <= "U";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= TILT_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if (evt_backward || tilt_backward_level) begin
+                        uart_data        <= "D";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= TILT_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if (evt_left || tilt_left_level) begin
+                        uart_data        <= "L";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= TILT_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if (evt_right || tilt_right_level) begin
+                        uart_data        <= "R";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= TILT_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else if ((TAP_GUARD_CLKS <= 1) || (tap_guard_count >= TAP_GUARD_CLKS - 1)) begin
+                        uart_data        <= "T";
+                        uart_send        <= 1'b1;
+                        pending_tap      <= 1'b0;
+                        tap_guard_count  <= 32'd0;
+                        armed            <= 1'b0;
+                        lockout_active   <= 1'b1;
+                        lockout_count    <= 32'd0;
+                        lockout_target   <= TAP_LOCKOUT_CLKS;
+                        rearm_count      <= 32'd0;
+                    end else begin
+                        tap_guard_count <= tap_guard_count + 1'b1;
+                    end
+                end
+            end
+
+            //--------------------------------------------------
+            // 3) After lockout, require a genuine neutral interval before re-arming.
+            //--------------------------------------------------
+            else if (!armed) begin
                 if (quiet_now) begin
-                    if (REARM_CLKS <= 1) begin
+                    if ((REARM_CLKS <= 1) || (rearm_count >= REARM_CLKS - 1)) begin
                         armed       <= 1'b1;
-                        rearm_count <= {REARM_W{1'b0}};
-                    end else if (rearm_count >= REARM_CLKS - 1) begin
-                        armed       <= 1'b1;
-                        rearm_count <= {REARM_W{1'b0}};
+                        rearm_count <= 32'd0;
                     end else begin
                         rearm_count <= rearm_count + 1'b1;
                     end
                 end else begin
-                    rearm_count <= {REARM_W{1'b0}};
+                    rearm_count <= 32'd0;
                 end
             end
 
             //--------------------------------------------------
-            // Pending tap arbitration.
-            // A real tap is emitted only if no stronger gesture develops
-            // during the short guard interval.
+            // 4) Armed: accept exactly one new gesture using fixed priority.
             //--------------------------------------------------
-            if (pending_tap && !uart_busy) begin
-                if (evt_flip || flip_signal) begin
+            else if (!uart_busy) begin
+                if (evt_flip) begin
                     uart_data       <= "F";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (evt_shake || shake_level) begin
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= FLIP_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
+                end else if (evt_shake) begin
                     uart_data       <= "S";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (evt_forward || tilt_forward_level) begin
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= SHAKE_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
+                end else if (evt_forward) begin
                     uart_data       <= "U";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (evt_backward || tilt_backward_level) begin
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= TILT_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
+                end else if (evt_backward) begin
                     uart_data       <= "D";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (evt_left || tilt_left_level) begin
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= TILT_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
+                end else if (evt_left) begin
                     uart_data       <= "L";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (evt_right || tilt_right_level) begin
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= TILT_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
+                end else if (evt_right) begin
                     uart_data       <= "R";
                     uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else if (TAP_GUARD_CLKS <= 1 || tap_guard_count >= TAP_GUARD_CLKS - 1) begin
-                    uart_data       <= "T";
-                    uart_send       <= 1'b1;
-                    pending_tap     <= 1'b0;
-                    tap_guard_count <= {TAP_W{1'b0}};
-                    armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
-                end else begin
-                    tap_guard_count <= tap_guard_count + 1'b1;
-                end
-            end
-
-            //--------------------------------------------------
-            // Accept a new command only while armed.
-            //--------------------------------------------------
-            else if (armed && !uart_busy) begin
-                // Highest priority first.
-                if (evt_flip) begin
-                    uart_data   <= "F";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
-                end else if (evt_shake) begin
-                    uart_data   <= "S";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
-                end else if (evt_forward) begin
-                    uart_data   <= "U";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
-                end else if (evt_backward) begin
-                    uart_data   <= "D";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
-                end else if (evt_left) begin
-                    uart_data   <= "L";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
-                end else if (evt_right) begin
-                    uart_data   <= "R";
-                    uart_send   <= 1'b1;
-                    armed       <= 1'b0;
-                    rearm_count <= {REARM_W{1'b0}};
+                    lockout_active  <= 1'b1;
+                    lockout_count   <= 32'd0;
+                    lockout_target  <= TILT_LOCKOUT_CLKS;
+                    rearm_count     <= 32'd0;
                 end else if (evt_tap) begin
-                    // Do not send T immediately. Wait briefly to make sure
-                    // the motion does not develop into shake/tilt/flip.
+                    // Delay T: if this motion becomes shake/tilt/flip, the stronger
+                    // gesture will replace the pending tap before anything is sent.
                     pending_tap     <= 1'b1;
-                    tap_guard_count <= {TAP_W{1'b0}};
+                    tap_guard_count <= 32'd0;
                     armed           <= 1'b0;
-                    rearm_count     <= {REARM_W{1'b0}};
+                    rearm_count     <= 32'd0;
                 end
             end
         end
