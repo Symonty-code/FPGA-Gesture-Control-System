@@ -58,6 +58,44 @@ if ($html.Contains($oldBootstrap)) {
     throw "Could not find the original application.js bootstrap in index.html."
 }
 
+# Apply a persistent CSS patch directly to the cloned game's stylesheet.
+# This is more reliable than depending only on dynamically injected styles.
+$cssPath = Join-Path $gameDir "style\main.css"
+if (-not (Test-Path $cssPath)) {
+    throw "Could not find style/main.css in the cloned 2048 source."
+}
+
+$cssMarker = "/* FPGA2048_CENTER_PATCH */"
+$css = Get-Content $cssPath -Raw
+if (-not $css.Contains($cssMarker)) {
+    $centerPatch = @'
+
+/* FPGA2048_CENTER_PATCH */
+@media screen and (min-width: 521px) {
+  body {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  body > .container {
+    width: 500px !important;
+    max-width: 500px !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  body > .container .game-container {
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+}
+'@
+    Add-Content -Path $cssPath -Value $centerPatch -Encoding UTF8
+    Write-Host "Patched style/main.css for centered desktop layout."
+} else {
+    Write-Host "style/main.css is already patched for centered desktop layout."
+}
+
 Write-Host ""
 Write-Host "Setup complete."
 Write-Host "Next:"
