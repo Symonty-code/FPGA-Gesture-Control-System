@@ -12,8 +12,11 @@
 module gesture_uart_bridge #(
     parameter integer UART_CLKS_PER_BIT = 35,
     parameter integer REARM_CLKS = 400000,             // 100 ms @ 4 MHz
-    parameter integer TAP_GUARD_CLKS = 800000,          // 200 ms
-    parameter integer DIR_GUARD_CLKS = 800000,          // 200 ms
+    // Hardware pilot showed a flip could initially appear as T and then D.
+    // Longer arbitration windows give the filtered-Z flip candidate time to
+    // override these transient interpretations before any byte is emitted.
+    parameter integer TAP_GUARD_CLKS = 2000000,         // 500 ms
+    parameter integer DIR_GUARD_CLKS = 1600000,         // 400 ms
     parameter integer FLIP_WAIT_TIMEOUT_CLKS = 8000000, // 2 s
     parameter integer TILT_LOCKOUT_CLKS  = 400000,      // 100 ms
     parameter integer TAP_LOCKOUT_CLKS   = 1000000,     // 250 ms
@@ -156,7 +159,7 @@ module gesture_uart_bridge #(
                             state <= ST_LOCKOUT; lockout_count <= 0;
                             lockout_target <= FLIP_LOCKOUT_CLKS; dir_count <= 0; rearm_count <= 0;
                         end else if (flip_candidate) begin
-                            // Key fix: discard pending direction while flip develops.
+                            // Discard the pending direction while a flip develops.
                             state <= ST_FLIP_WAIT; flip_wait_count <= 0; dir_count <= 0;
                         end else if ((DIR_GUARD_CLKS <= 1) || (dir_count >= DIR_GUARD_CLKS - 1)) begin
                             uart_data <= pending_dir_data; uart_send <= 1'b1;
