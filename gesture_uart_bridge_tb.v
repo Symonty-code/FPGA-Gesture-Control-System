@@ -134,8 +134,6 @@ module gesture_uart_bridge_tb;
     endtask
 
     // One intended left gesture followed by detector-tail chatter.
-    // Only L is allowed; T/S/R tails must be ignored while the validated
-    // directional command is in its short flip-check guard and later lockout.
     task left_with_tail_chatter;
         begin
             @(negedge clk); tilt_left_level = 1'b1;
@@ -157,7 +155,6 @@ module gesture_uart_bridge_tb;
     endtask
 
     // Simulates a tap-like transient at the beginning of a shake.
-    // Expected result: S only; pending T must be cancelled.
     task tap_then_shake;
         begin
             @(negedge clk); tap_signal = 1'b1;
@@ -202,11 +199,7 @@ module gesture_uart_bridge_tb;
         end
     endtask
 
-    // Regression for the physical issue observed during pilot testing:
-    // a board flip can first look like a backward tilt.  Backward becomes
-    // pending, then the early flip candidate appears before the direction
-    // guard expires, and finally the validated F pulse arrives.  Only F is
-    // allowed to reach UART.
+    // Physical issue #1: a flip can first look like backward tilt.
     task backward_then_flip_candidate;
         begin
             @(negedge clk);
@@ -228,8 +221,41 @@ module gesture_uart_bridge_tb;
         end
     endtask
 
+    // Physical issue #2 observed in the second pilot: a flip could first
+    // create a tap-like transient and then a backward tilt (T,D) before F.
+    // The tap must remain pending, backward must replace that pending tap,
+    // and the later flip candidate must replace the pending direction.
+    // Result must be exactly one F byte.
+    task tap_backward_then_flip_candidate;
+        begin
+            @(negedge clk);
+            tap_signal = 1'b1;
+            repeat (2) @(posedge clk);
+            @(negedge clk);
+            tap_signal = 1'b0;
+
+            repeat (3) @(posedge clk);
+            @(negedge clk);
+            tilt_backward_level = 1'b1;
+            repeat (3) @(posedge clk);
+
+            @(negedge clk);
+            flip_candidate = 1'b1;
+            repeat (5) @(posedge clk);
+
+            @(negedge clk);
+            flip_signal = 1'b1;
+            repeat (2) @(posedge clk);
+
+            @(negedge clk);
+            flip_signal = 1'b0;
+            flip_candidate = 1'b0;
+            tilt_backward_level = 1'b0;
+        end
+    endtask
+
     initial begin
-        #1500000;
+        #1800000;
         $display("FAIL: simulation timeout");
         $fatal;
     end
@@ -298,6 +324,15 @@ module gesture_uart_bridge_tb;
             $fatal;
         end
         $display("PASS: flip candidate suppressed backward cross-trigger");
+
+        before_count = command_count;
+        fork tap_backward_then_flip_candidate(); expect_uart_byte("F"); join
+        wait_for_full_rearm();
+        if (command_count !== before_count + 1) begin
+            $display("FAIL: tap/backward flip sequence generated extra commands");
+            $fatal;
+        end
+        $display("PASS: developing flip suppressed tap and backward transients");
 
         $display("ALL FPGA->UART PHASE-AWARE ARBITER TESTS PASSED");
         $finish;
