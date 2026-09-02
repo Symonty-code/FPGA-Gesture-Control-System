@@ -156,13 +156,15 @@ module top(
     // Flip Detector
     //--------------------------------------------------
     wire flip_pulse;
+    wire flip_candidate;
 
     flip_detector flip (
         .clk(clk_4MHz),
         .rst(rst),
         .in_valid(sh_valid),
         .in_z(filt_z),
-        .flip_pulse(flip_pulse)
+        .flip_pulse(flip_pulse),
+        .flip_candidate(flip_candidate)
     );
 
     //--------------------------------------------------
@@ -213,8 +215,8 @@ module top(
     );
 
     //--------------------------------------------------
-    // NEW: FPGA -> PC gesture command bridge
-    // Sends one ASCII byte per newly detected gesture:
+    // FPGA -> PC gesture command bridge
+    // Sends one ASCII byte per newly accepted gesture:
     // L, R, U, D, T, S, F
     //--------------------------------------------------
     gesture_uart_bridge game_uart (
@@ -227,6 +229,7 @@ module top(
         .tap_signal          (tap_pulse),
         .shake_level         (shake_level),
         .flip_signal         (flip_pulse),
+        .flip_candidate      (flip_candidate),
         .uart_tx_out         (UART_RXD_OUT)
     );
 
