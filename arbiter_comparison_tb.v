@@ -13,8 +13,8 @@
 //   - "Post-arbitration" means the command actually accepted by
 //     gesture_uart_bridge (dut.uart_send / dut.uart_data).
 //
-// Five conflict scenarios are repeated 10 times each (50 physical-gesture
-// episodes in simulation):
+// Five conflict scenarios are repeated 10 times each (50 gesture episodes
+// in simulation):
 //   1) directional gesture with detector-tail chatter
 //   2) shake with tap/direction tail chatter
 //   3) tap-like transient developing into shake
@@ -110,6 +110,7 @@ module arbiter_comparison_tb;
 
     always @(posedge clk) begin
         if (rst) begin
+            raw_candidate_count <= 0;
             raw_prev_left     <= 1'b0;
             raw_prev_right    <= 1'b0;
             raw_prev_forward  <= 1'b0;
@@ -118,13 +119,16 @@ module arbiter_comparison_tb;
             raw_prev_shake    <= 1'b0;
             raw_prev_flip     <= 1'b0;
         end else begin
-            if (tilt_left_level     && !raw_prev_left)     raw_candidate_count <= raw_candidate_count + 1;
-            if (tilt_right_level    && !raw_prev_right)    raw_candidate_count <= raw_candidate_count + 1;
-            if (tilt_forward_level  && !raw_prev_forward)  raw_candidate_count <= raw_candidate_count + 1;
-            if (tilt_backward_level && !raw_prev_backward) raw_candidate_count <= raw_candidate_count + 1;
-            if (tap_signal          && !raw_prev_tap)      raw_candidate_count <= raw_candidate_count + 1;
-            if (shake_level         && !raw_prev_shake)    raw_candidate_count <= raw_candidate_count + 1;
-            if (flip_signal         && !raw_prev_flip)     raw_candidate_count <= raw_candidate_count + 1;
+            // One accumulated assignment is required because more than one
+            // detector can rise on the same cycle (e.g. shake + right tail).
+            raw_candidate_count <= raw_candidate_count
+                + ((tilt_left_level     && !raw_prev_left)     ? 1 : 0)
+                + ((tilt_right_level    && !raw_prev_right)    ? 1 : 0)
+                + ((tilt_forward_level  && !raw_prev_forward)  ? 1 : 0)
+                + ((tilt_backward_level && !raw_prev_backward) ? 1 : 0)
+                + ((tap_signal          && !raw_prev_tap)      ? 1 : 0)
+                + ((shake_level         && !raw_prev_shake)    ? 1 : 0)
+                + ((flip_signal         && !raw_prev_flip)     ? 1 : 0);
 
             raw_prev_left     <= tilt_left_level;
             raw_prev_right    <= tilt_right_level;
