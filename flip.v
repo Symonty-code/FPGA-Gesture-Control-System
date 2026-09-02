@@ -1,104 +1,96 @@
 `timescale 1ns/1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Flip Detector - Event-Based Version with Early Flip Candidate
+// One-way Flip Detector: FACE-UP -> FACE-DOWN
 //
-// Detects sequence:
-//   1) Z stably positive (upright reference acquired)
-//   2) Board rotates far enough toward inversion -> flip_candidate asserted
-//   3) Z stably negative -> one-cycle flip_pulse
+// A flip event is generated only for this sequence:
+//   1) Board is stably face-up (positive Z) long enough to arm.
+//   2) Board leaves the upright region -> flip_candidate asserts early.
+//   3) Board reaches and holds face-down (negative Z) -> flip_pulse.
 //
-// flip_candidate is intentionally earlier than flip_pulse. It lets the
-// command arbiter suppress orientation-induced tilt/tap commands while a
-// physical flip is still developing.
+// Returning from face-down to face-up does NOT generate a flip. It only
+// re-arms the detector for the next future face-up -> face-down transition.
 //////////////////////////////////////////////////////////////////////////////////
 
 module flip_detector #(
-    parameter signed THRESH = 16'sd800,
-    // Raised from 300 after hardware pilot showed backward-tilt commands
-    // could be accepted before a developing flip was visible to the arbiter.
-    // 600 is still below the normal upright region but is reached much earlier
-    // during inversion than the final negative-Z validation threshold.
-    parameter signed CANDIDATE_THRESH = 16'sd600,
-    parameter STABLE_SAMPLES = 50
+    parameter signed UPRIGHT_THRESH   = 16'sd800,
+    parameter signed CANDIDATE_THRESH = 16'sd750,
+    parameter signed FACEDOWN_THRESH  = -16'sd800,
+    parameter integer ARM_SAMPLES     = 20,   // ~200 ms at ~100 Hz
+    parameter integer FLIP_SAMPLES    = 25    // ~250 ms face-down confirmation
 )(
-    input  wire               clk,
-    input  wire               rst,
-    input  wire               in_valid,
-    input  wire signed [15:0] in_z,
+    input  wire                clk,
+    input  wire                rst,
+    input  wire                in_valid,
+    input  wire signed [15:0]  in_z,
 
-    output reg                flip_pulse,
-    output reg                flip_candidate
+    output reg                 flip_pulse,
+    output reg                 flip_candidate
 );
 
-    localparam WAIT_POS = 2'd0;
-    localparam WAIT_NEG = 2'd1;
+    reg        armed_faceup;
+    reg [7:0]  arm_count;
+    reg [7:0]  facedown_count;
 
-    reg [1:0] state;
-    reg [7:0] stable_cnt;
-
-    wire z_positive = (in_z >  THRESH);
-    wire z_negative = (in_z < -THRESH);
+    wire faceup_now   = (in_z > UPRIGHT_THRESH);
+    wire facedown_now = (in_z < FACEDOWN_THRESH);
 
     always @(posedge clk) begin
         if (rst) begin
-            state          <= WAIT_POS;
-            stable_cnt     <= 0;
-            flip_pulse     <= 0;
-            flip_candidate <= 0;
-
+            armed_faceup   <= 1'b0;
+            arm_count      <= 8'd0;
+            facedown_count <= 8'd0;
+            flip_candidate <= 1'b0;
+            flip_pulse     <= 1'b0;
         end else if (in_valid) begin
+            flip_pulse <= 1'b0;
 
-            flip_pulse <= 0;
+            // -------------------------------------------------------------
+            // Phase 1: arm only after a short stable face-up interval.
+            // -------------------------------------------------------------
+            if (!armed_faceup) begin
+                flip_candidate <= 1'b0;
+                facedown_count <= 8'd0;
 
-            case (state)
-
-                WAIT_POS: begin
-                    flip_candidate <= 0;
-
-                    if (z_positive) begin
-                        if (stable_cnt + 1 >= STABLE_SAMPLES) begin
-                            state      <= WAIT_NEG;
-                            stable_cnt <= 0;
-                        end else begin
-                            stable_cnt <= stable_cnt + 1'b1;
-                        end
+                if (faceup_now) begin
+                    if ((ARM_SAMPLES <= 1) || (arm_count >= ARM_SAMPLES - 1)) begin
+                        armed_faceup <= 1'b1;
+                        arm_count    <= 8'd0;
                     end else begin
-                        stable_cnt <= 0;
+                        arm_count <= arm_count + 1'b1;
                     end
+                end else begin
+                    arm_count <= 8'd0;
                 end
+            end
 
-                WAIT_NEG: begin
-                    // Normal upright operation keeps Z strongly positive.
-                    // As soon as filtered Z falls sufficiently below the
-                    // upright region, mark the motion as a developing flip.
-                    // The flag remains asserted until the flip completes or
-                    // the board clearly returns to the upright region.
-                    if (in_z < CANDIDATE_THRESH)
-                        flip_candidate <= 1'b1;
-                    else if (z_positive)
+            // -------------------------------------------------------------
+            // Phase 2: detector is armed.  As the board starts rotating away
+            // from face-up, assert flip_candidate early so UART arbitration
+            // can suppress transient Tap/Backward interpretations.
+            // -------------------------------------------------------------
+            else begin
+                if (in_z < CANDIDATE_THRESH)
+                    flip_candidate <= 1'b1;
+                else if (faceup_now)
+                    flip_candidate <= 1'b0;
+
+                // A valid flip is simply stable face-down after being armed
+                // face-up.  No face-down -> face-up motion is required.
+                if (facedown_now) begin
+                    if ((FLIP_SAMPLES <= 1) ||
+                        (facedown_count >= FLIP_SAMPLES - 1)) begin
+                        flip_pulse     <= 1'b1;
                         flip_candidate <= 1'b0;
-
-                    if (z_negative) begin
-                        if (stable_cnt + 1 >= STABLE_SAMPLES) begin
-                            flip_pulse     <= 1'b1;
-                            flip_candidate <= 1'b0;
-                            state          <= WAIT_POS;
-                            stable_cnt     <= 0;
-                        end else begin
-                            stable_cnt <= stable_cnt + 1'b1;
-                        end
+                        armed_faceup   <= 1'b0;
+                        facedown_count <= 8'd0;
+                        arm_count      <= 8'd0;
                     end else begin
-                        stable_cnt <= 0;
+                        facedown_count <= facedown_count + 1'b1;
                     end
+                end else begin
+                    facedown_count <= 8'd0;
                 end
-
-                default: begin
-                    state          <= WAIT_POS;
-                    stable_cnt     <= 0;
-                    flip_candidate <= 0;
-                end
-
-            endcase
+            end
         end
     end
 
