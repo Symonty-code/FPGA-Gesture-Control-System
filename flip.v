@@ -7,14 +7,18 @@
 //   2) Board rotates far enough toward inversion -> flip_candidate asserted
 //   3) Z stably negative -> one-cycle flip_pulse
 //
-// flip_candidate is intentionally earlier than flip_pulse.  It lets the
-// command arbiter suppress orientation-induced tilt commands while a physical
-// flip is still developing.
+// flip_candidate is intentionally earlier than flip_pulse. It lets the
+// command arbiter suppress orientation-induced tilt/tap commands while a
+// physical flip is still developing.
 //////////////////////////////////////////////////////////////////////////////////
 
 module flip_detector #(
     parameter signed THRESH = 16'sd800,
-    parameter signed CANDIDATE_THRESH = 16'sd300,
+    // Raised from 300 after hardware pilot showed backward-tilt commands
+    // could be accepted before a developing flip was visible to the arbiter.
+    // 600 is still below the normal upright region but is reached much earlier
+    // during inversion than the final negative-Z validation threshold.
+    parameter signed CANDIDATE_THRESH = 16'sd600,
     parameter STABLE_SAMPLES = 50
 )(
     input  wire               clk,
@@ -64,9 +68,11 @@ module flip_detector #(
                 end
 
                 WAIT_NEG: begin
-                    // Normal upright operation keeps Z strongly positive, so
-                    // the candidate remains low.  Once Z falls well below the
-                    // upright region, a flip is considered to be developing.
+                    // Normal upright operation keeps Z strongly positive.
+                    // As soon as filtered Z falls sufficiently below the
+                    // upright region, mark the motion as a developing flip.
+                    // The flag remains asserted until the flip completes or
+                    // the board clearly returns to the upright region.
                     if (in_z < CANDIDATE_THRESH)
                         flip_candidate <= 1'b1;
                     else if (z_positive)
